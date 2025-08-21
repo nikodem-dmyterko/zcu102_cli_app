@@ -117,4 +117,3 @@ void video_cfg_cleanup(void) {
     vlib_uninit_gst();
     vgst_uninit();
 }
-

@@ -72,4 +72,3 @@ out:
     video_cfg_cleanup();
     return ret;
 }
-
