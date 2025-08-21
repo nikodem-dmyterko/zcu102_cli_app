@@ -6,23 +6,19 @@
 #include <vgst_sdxfilter2d.h>
 #include <video.h>
 
-static vgst_application app;
 static vgst_enc_params enc_param;
 static vgst_sdx_filter_params filter_param;
 static vgst_ip_params input_param;
 static vgst_op_params output_param;
 static vgst_cmn_params cmn_param;
-static vgst_playback playback[MAX_SRC_NUM];
 static struct filter_tbl ft;
+static struct vlib_config_data vlib_cfg;
 
 void video_cfg_init(void) {
-    memset(&app, 0, sizeof(app));
-    memset(&enc_param, 0, sizeof(enc_param));
-    memset(&filter_param, 0, sizeof(filter_param));
-    memset(&input_param, 0, sizeof(input_param));
-    memset(&output_param, 0, sizeof(output_param));
-    memset(&cmn_param, 0, sizeof(cmn_param));
-    memset(playback, 0, sizeof(playback));
+    memset(&vlib_cfg, 0, sizeof(vlib_cfg));
+
+    init_struct_params(&enc_param, &input_param, &output_param, &cmn_param,
+                       &filter_param);
 
     filter_init(&ft);
     filter_param.filter_name = SDX_FILTER2D_PLUGIN;
@@ -32,12 +28,8 @@ void video_cfg_init(void) {
     cmn_param.sink_type = DISPLAY;
     cmn_param.driver_type = DP;
 
-    app.enc_params = &enc_param;
-    app.filter_params = &filter_param;
-    app.ip_params = &input_param;
-    app.op_params = &output_param;
-    app.cmn_params = &cmn_param;
-    memcpy(app.playback, playback, sizeof(playback));
+    vgst_init();
+    vlib_video_src_init(&vlib_cfg);
 }
 
 void video_cfg_list_sources(void) {
@@ -101,12 +93,16 @@ void video_cfg_set_accel(int hw) {
 }
 
 int video_cfg_create_pipeline(const char *mode) {
+    vlib_cfg.display_id = cmn_param.driver_type;
+    vlib_init_gst(&vlib_cfg);
+
     if (mode && strcmp(mode, "passthrough") == 0) {
         input_param.filter_type = VCU;
     } else {
         input_param.filter_type = SDX_FILTER;
     }
-    int ret = vgst_config_options(&enc_param, &input_param, &output_param, &cmn_param, &filter_param);
+    int ret = vgst_config_options(&enc_param, &input_param, &output_param,
+                                  &cmn_param, &filter_param);
     if (ret != VGST_SUCCESS) {
         return ret;
     }
@@ -117,3 +113,7 @@ int video_cfg_create_pipeline(const char *mode) {
     return vgst_run_pipeline();
 }
 
+void video_cfg_cleanup(void) {
+    vlib_uninit_gst();
+    vgst_uninit();
+}

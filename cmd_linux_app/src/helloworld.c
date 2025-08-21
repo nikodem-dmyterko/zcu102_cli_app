@@ -6,6 +6,7 @@
 #include "video_cfg.h"
 
 int main(int argc, char **argv) {
+    int ret = 0;
     video_cfg_init();
 
     static struct option opts[] = {
@@ -46,7 +47,8 @@ int main(int argc, char **argv) {
         case 'p':
             if (optind + 2 >= argc) {
                 cmd_print_help(argv[0]);
-                return 1;
+                ret = 1;
+                goto out;
             }
             {
                 const char *src = argv[optind++];
@@ -54,17 +56,19 @@ int main(int argc, char **argv) {
                 const char *mode = argv[optind++];
                 if (cmd_create_pipeline(src, sink, mode) != 0) {
                     fprintf(stderr, "Failed to create pipeline\n");
-                    return 1;
+                    ret = 1;
+                    goto out;
                 }
             }
             break;
         case 'h':
         default:
             cmd_print_help(argv[0]);
-            return 0;
+            goto out;
         }
     }
 
-    return 0;
+out:
+    video_cfg_cleanup();
+    return ret;
 }
-

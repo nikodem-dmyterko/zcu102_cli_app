@@ -12,5 +12,6 @@ int  video_cfg_set_sink(const char *name);
 int  video_cfg_set_filter(const char *name, const short coeff[3][3]);
 void video_cfg_set_accel(int hw);
 int  video_cfg_create_pipeline(const char *mode);
+void video_cfg_cleanup(void);
 
 #endif /* VIDEO_CFG_H */
