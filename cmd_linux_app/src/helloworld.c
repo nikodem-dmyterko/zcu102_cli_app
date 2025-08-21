@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
+#include <strings.h>
 
 #include <gst/gst.h>
 #include <glib.h>
@@ -32,6 +34,11 @@ static struct option opts[] = {
     { "help",              no_argument,       NULL, 'h' },
     { "partial-reconfig",  no_argument,       NULL, 'p' },
     { "resolution",        required_argument, NULL, 'r' },
+    { "source",            required_argument, NULL, 's' },
+    { "sink",              required_argument, NULL, 'k' },
+    { "filter2d",          required_argument, NULL, 'f' },
+    { "accel",             required_argument, NULL, 'a' },
+    { "pipeline",          required_argument, NULL, 'P' },
     { NULL, 0, NULL, 0 }
 };
 
@@ -62,6 +69,13 @@ int main(int argc, char **argv)
 
     // --- Konfiguracja wyjścia / parse args ---
     int ret, i, c;
+    const char *opt_source = NULL;
+    const char *opt_sink = NULL;
+    const char *opt_filter = NULL;
+    const char *opt_accel = NULL;
+    const char *opt_pipeline = NULL;
+    bool list_sources = false;
+    bool list_sinks = false;
     int best_mode = 1;
     const int width[MAX_MODES]  = {3840, 1920, 1280};
     const int height[MAX_MODES] = {2160, 1080, 720};
@@ -77,7 +91,7 @@ int main(int argc, char **argv)
     g_flags = &(cfg.flags);
     cfg.flags |= VLIB_CFG_FLAG_FILE_ENABLE; /* Enable file source support */
 
-    while ((c = getopt_long(argc, argv, "d:hpr:", opts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "d:hpr:s:k:f:a:P:", opts, NULL)) != -1) {
         switch (c) {
         case 'd':
             sscanf(optarg, "%u", &cfg.display_id);
@@ -87,6 +101,11 @@ int main(int argc, char **argv)
             printf("-d, --drm-module name   DRM module index (0/1)\n");
             printf("-p, --partial-reconfig  Enable PR\n");
             printf("-r, --resolution WxH    3840x2160 | 1920x1080 | 1280x720\n");
+            printf("-s, --source name|h     Select source or list with 'h'\n");
+            printf("-k, --sink name|h       Select sink or list with 'h'\n");
+            printf("-f, --filter2d spec     Set 2D filter coefficients\n");
+            printf("-a, --accel sw|hw       Choose SW or HW acceleration\n");
+            printf("-P, --pipeline spec     Build pipeline src,sink,mode\n");
             return 0;
         case 'p':
             cfg.flags |= VLIB_CFG_FLAG_PR_ENABLE;
@@ -98,6 +117,29 @@ int main(int argc, char **argv)
                 return 1;
             }
             best_mode = 0;
+            break;
+        case 's':
+            if (strcmp(optarg, "h") == 0) {
+                list_sources = true;
+            } else {
+                opt_source = optarg;
+            }
+            break;
+        case 'k':
+            if (strcmp(optarg, "h") == 0) {
+                list_sinks = true;
+            } else {
+                opt_sink = optarg;
+            }
+            break;
+        case 'f':
+            opt_filter = optarg;
+            break;
+        case 'a':
+            opt_accel = optarg;
+            break;
+        case 'P':
+            opt_pipeline = optarg;
             break;
         default:
             fprintf(stderr, "Invalid option -%c\n", c);
@@ -166,9 +208,57 @@ int main(int argc, char **argv)
     printf("video sources found: %zu, using index %u\n",
            vlib_video_src_cnt_get(), config.vsrc);
 
-    // --- init controllera i start wybranego źródła ---
+    // --- init controllera ---
     cmd_init(&mc, config, &ft);
-    setVideo(&mc, 1);   // NIE na sztywno „1” – używamy wykrytego
+
+    if (list_sources) {
+        cmd_print_sources();
+        return 0;
+    }
+    if (list_sinks) {
+        cmd_print_sinks();
+        return 0;
+    }
+
+    if (opt_source) {
+        cmd_select_source_by_name(&mc, opt_source);
+    }
+    if (opt_sink) {
+        cmd_select_sink_by_name(&mc, opt_sink);
+    }
+    if (opt_filter) {
+        char *tmp = strdup(opt_filter);
+        char *name = strtok(tmp, "/");
+        char *vals = strtok(NULL, "");
+        int coeff[9] = {0};
+        if (vals) {
+            char *tok = strtok(vals, ",");
+            int idx = 0;
+            while (tok && idx < 9) {
+                coeff[idx++] = atoi(tok);
+                tok = strtok(NULL, ",");
+            }
+            if (idx == 9) {
+                cmd_set_filter2d(&mc, name, coeff);
+            }
+        }
+        free(tmp);
+    }
+    if (opt_accel) {
+        bool hw = strcasecmp(opt_accel, "hw") == 0;
+        cmd_set_accel(hw);
+    }
+    if (opt_pipeline) {
+        char *tmp = strdup(opt_pipeline);
+        char *src = strtok(tmp, ",");
+        char *sink = strtok(NULL, ",");
+        char *mode = strtok(NULL, ",");
+        bool processing = mode && strcasecmp(mode, "processing") == 0;
+        cmd_create_pipeline(&mc, src, sink, processing);
+        free(tmp);
+    } else {
+        setVideo(&mc, 1);
+    }
 
     // --- Ustaw PLAYING + bus watch (jeśli biblioteka sama nie robi) ---
     for (unsigned s = 0; s < cmn_param.num_src; ++s) {

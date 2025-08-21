@@ -4,6 +4,7 @@
 #include <vcap_csi.h>
 #include <vcap_tpg.h>
 #include <vgst_lib.h>
+#include <stdio.h>
 
 #include "cmd_helper.h"
 #include "video_cfg.h"
@@ -373,6 +374,68 @@ void videoSrcLoop(struct maincontroller *mc){
         mc->demo_src_loop_count++;
         break;   // jeden „krok”; resztę zrobi timer
     }
+}
+
+void cmd_print_sources(void) {
+    size_t cnt = vsrc_count();
+    printf("Available sources (%zu):\n", cnt);
+    for (size_t i = 0; i < cnt; ++i) {
+        const char *name = vsrc_name(i);
+        if (name)
+            printf("  %s\n", name);
+    }
+}
+
+void cmd_print_sinks(void) {
+    size_t cnt = vsnk_count();
+    printf("Available sinks (%zu):\n", cnt);
+    for (size_t i = 0; i < cnt; ++i) {
+        const char *name = vsnk_name(i);
+        if (name)
+            printf("  %s\n", name);
+    }
+}
+
+int cmd_select_source_by_name(struct maincontroller *mc, const char *name) {
+    int idx = vsrc_index_by_name(name);
+    if (idx < 0) {
+        printf("Unknown source '%s'\n", name);
+        return -1;
+    }
+    setInput(mc, idx, 0, NULL, false);
+    return 0;
+}
+
+int cmd_select_sink_by_name(struct maincontroller *mc, const char *name) {
+    int idx = vsnk_index_by_name(name);
+    if (idx < 0) {
+        printf("Unknown sink '%s'\n", name);
+        return -1;
+    }
+    printf("Selected sink %s\n", vsnk_name(idx));
+    return 0;
+}
+
+void cmd_set_filter2d(struct maincontroller *mc, const char *name, const int coeff[9]) {
+    UNUSED(name);
+    filterCoeff(mc, coeff[0], coeff[1], coeff[2],
+                    coeff[3], coeff[4], coeff[5],
+                    coeff[6], coeff[7], coeff[8]);
+}
+
+void cmd_set_accel(bool hw) {
+    printf("Acceleration: %s\n", hw ? "hw" : "sw");
+}
+
+void cmd_create_pipeline(struct maincontroller *mc, const char *src,
+                         const char *sink, bool processing) {
+    if (src) cmd_select_source_by_name(mc, src);
+    if (sink) cmd_select_sink_by_name(mc, sink);
+    if (processing)
+        printf("Pipeline mode: processing\n");
+    else
+        printf("Pipeline mode: passthrough\n");
+    setVideo(mc, 1);
 }
 
 

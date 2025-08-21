@@ -15,6 +15,11 @@ struct v_filter {
     bool has_panel;
 };
 
+struct v_sink {
+    const char *name;
+    const char *short_name;
+};
+
 static struct v_playmode playmode_tbl[] = {
     {"Manual", "Manual", true},
     {"Demo", "Demo", true},
@@ -33,6 +38,11 @@ static struct v_filter filter_tbl[] = {
     {"2D Filter", "2D Filter", true},
     {"Simple Posterize", "Simple Posterize", false},
     {"Optical Flow", "Optical Flow", false},
+};
+
+static struct v_sink vsnk_tbl[] = {
+    {"HDMI", "HDMI"},
+    {"FILE", "FILE"},
 };
 
 static struct v_source* get_vsrc_by_id(video_src id) {
@@ -101,4 +111,38 @@ void vsrc_set_vd(video_src vsrc, const struct vlib_vdev *vd) {
     struct v_source *vs = get_vsrc_by_id(vsrc);
     if (!vs) return;
     vs->vd = vd;
+}
+
+size_t vsrc_count(void) {
+    return ARRAY_SIZE(vsrc_tbl);
+}
+
+const char *vsrc_name(size_t index) {
+    if (index >= ARRAY_SIZE(vsrc_tbl)) return NULL;
+    return vsrc_tbl[index].short_name;
+}
+
+int vsrc_index_by_name(const char *name) {
+    for (size_t i = 0; i < ARRAY_SIZE(vsrc_tbl); ++i) {
+        if (strcasecmp(name, vsrc_tbl[i].short_name) == 0)
+            return (int)i;
+    }
+    return -1;
+}
+
+size_t vsnk_count(void) {
+    return ARRAY_SIZE(vsnk_tbl);
+}
+
+const char *vsnk_name(size_t index) {
+    if (index >= ARRAY_SIZE(vsnk_tbl)) return NULL;
+    return vsnk_tbl[index].short_name;
+}
+
+int vsnk_index_by_name(const char *name) {
+    for (size_t i = 0; i < ARRAY_SIZE(vsnk_tbl); ++i) {
+        if (strcasecmp(name, vsnk_tbl[i].short_name) == 0)
+            return (int)i;
+    }
+    return -1;
 }
