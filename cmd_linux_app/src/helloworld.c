@@ -1,9 +1,8 @@
-#include <errno.h>
-#include <getopt.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include <gst/gst.h>
 #include <glib.h>
@@ -12,13 +11,11 @@
 #include "filter.h"
 #include "vgst_lib.h"
 #include "video_cfg.h"
-#include "vgst_utils.h"   // dla init_struct_params, bus_callback, vgst_* API
+#include "vgst_sdxfilter2d.h"
+#include "vgst_utils.h"   // init_struct_params, vgst_* API
 
-// ---- Dane / struktury jak u Ciebie ----
 struct maincontroller mc;
 struct filter_tbl ft;
-extern vgst_application app;
-#define MAX_MODES 3
 
 unsigned int *g_flags;
 vgst_enc_params         enc_param;
@@ -27,19 +24,87 @@ vgst_ip_params          input_param;
 vgst_op_params          output_param;
 vgst_cmn_params         cmn_param;
 
-static struct option opts[] = {
-    { "drm-module",        required_argument, NULL, 'd' },
-    { "help",              no_argument,       NULL, 'h' },
-    { "partial-reconfig",  no_argument,       NULL, 'p' },
-    { "resolution",        required_argument, NULL, 'r' },
-    { NULL, 0, NULL, 0 }
-};
-
 static GMainLoop *g_loop = NULL;
 
 static void sigint_handler(int s) {
     (void)s;
     if (g_loop) g_main_loop_quit(g_loop);
+}
+
+struct sink_map {
+    const char *name;
+    VGST_SINK_TYPE type;
+};
+
+static const struct sink_map sink_tbl[] = {
+    {"stream",  STREAM},
+    {"record",  RECORD},
+    {"display", DISPLAY},
+    {"split",   SPLIT_SCREEN},
+};
+
+static void print_usage(const char *prog)
+{
+    printf("Usage: %s [--source h|NAME] [--sink h|NAME]\n"
+           "           [--filter2d NAME|COEFF] [--accel sw|hw]\n"
+           "           [--pipeline SRC SINK passthrough|processing]\n"
+           "           [--help]\n\n"
+           "Example: %s --pipeline tpg display processing --filter2d blur --accel hw\n",
+           prog, prog);
+}
+
+static void list_sources(void)
+{
+    size_t cnt = vlib_video_src_cnt_get();
+    printf("Available sources (%zu):\n", cnt);
+    for (size_t i = 0; i < cnt; ++i) {
+        const struct vlib_vdev *v = vlib_video_src_get(i);
+        enum vlib_vsrc_class cls = vlib_video_src_get_class(v);
+        const char *name = vsrc_get_short_name(cls);
+        if (!name)
+            name = vlib_video_src_get_display_text(v);
+        printf("  %s\n", name);
+    }
+}
+
+static void list_sinks(void)
+{
+    printf("Available sinks (%zu):\n", sizeof(sink_tbl)/sizeof(sink_tbl[0]));
+    for (size_t i = 0; i < sizeof(sink_tbl)/sizeof(sink_tbl[0]); ++i)
+        printf("  %s\n", sink_tbl[i].name);
+}
+
+static void list_filter2d(void)
+{
+    printf("Available 2D filter presets (%d):\n", FILTER2D_PRESET_CNT);
+    for (int i = 0; i < FILTER2D_PRESET_CNT; ++i)
+        printf("  %s\n", filter2d_get_preset_name(i));
+}
+
+static int source_from_name(const char *name)
+{
+    size_t cnt = vlib_video_src_cnt_get();
+    for (size_t i = 0; i < cnt; ++i) {
+        const struct vlib_vdev *v = vlib_video_src_get(i);
+        enum vlib_vsrc_class cls = vlib_video_src_get_class(v);
+        const char *sn = vsrc_get_short_name(cls);
+        if (sn && !strcasecmp(name, sn))
+            return i;
+        const char *dn = vlib_video_src_get_display_text(v);
+        if (dn && !strcasecmp(name, dn))
+            return i;
+    }
+    return -1;
+}
+
+static int sink_from_name(const char *name, VGST_SINK_TYPE *out)
+{
+    for (size_t i = 0; i < sizeof(sink_tbl)/sizeof(sink_tbl[0]); ++i)
+        if (!strcasecmp(name, sink_tbl[i].name)) {
+            *out = sink_tbl[i].type;
+            return 0;
+        }
+    return -1;
 }
 
 int main(int argc, char **argv)
@@ -58,145 +123,168 @@ int main(int argc, char **argv)
     sa.sa_flags = SA_RESTART;
     sigaction(SIGINT, &sa, NULL);
 
-    printf("CLI start\n");
+    vgst_init();
 
-    // --- Konfiguracja wyjścia / parse args ---
-    int ret, i, c;
-    int best_mode = 1;
-    const int width[MAX_MODES]  = {3840, 1920, 1280};
-    const int height[MAX_MODES] = {2160, 1080, 720};
+    struct vlib_config_data cfg = {0};
+    struct vlib_config      config = {0};
 
-    struct vlib_config_data cfg;
-    struct vlib_config      config;   // do przekazania vsrc/mode/type
+    cfg.width_out = 1280;
+    cfg.height_out = 720;
+    g_flags = &cfg.flags;
+    cfg.flags |= VLIB_CFG_FLAG_FILE_ENABLE;
 
-    memset(&cfg, 0, sizeof(cfg));
-    memset(&config, 0, sizeof(config));
-
-    cfg.width_out = width[0];
-    cfg.height_out = height[0];
-    g_flags = &(cfg.flags);
-    cfg.flags |= VLIB_CFG_FLAG_FILE_ENABLE; /* Enable file source support */
-
-    while ((c = getopt_long(argc, argv, "d:hpr:", opts, NULL)) != -1) {
-        switch (c) {
-        case 'd':
-            sscanf(optarg, "%u", &cfg.display_id);
-            break;
-        case 'h':
-            printf("Usage: %s [options]\n", argv[0]);
-            printf("-d, --drm-module name   DRM module index (0/1)\n");
-            printf("-p, --partial-reconfig  Enable PR\n");
-            printf("-r, --resolution WxH    3840x2160 | 1920x1080 | 1280x720\n");
-            return 0;
-        case 'p':
-            cfg.flags |= VLIB_CFG_FLAG_PR_ENABLE;
-            break;
-        case 'r':
-            ret = sscanf(optarg, "%ux%u", &cfg.width_out, &cfg.height_out);
-            if (ret != 2) {
-                fprintf(stderr, "Invalid size '%s'\n", optarg);
-                return 1;
-            }
-            best_mode = 0;
-            break;
-        default:
-            fprintf(stderr, "Invalid option -%c\n", c);
-            return 1;
-        }
-    }
-
-    // --- Dobór trybu KMS ---
-    for (i = 0; i < MAX_MODES; i++) {
-        if (best_mode) {
-            size_t vr;
-            ret = vlib_drm_try_mode(cfg.display_id, width[i], height[i], &vr);
-            if (ret == VLIB_SUCCESS) {
-                cfg.width_out = width[i];
-                cfg.height_out = height[i];
-                cfg.fps.numerator = vr;
-                cfg.fps.denominator = 1;
-                break;
-            }
-        } else {
-            if (cfg.width_out == width[i] && cfg.height_out == height[i])
-                break;
-        }
-    }
-    if (i == MAX_MODES) {
-        fprintf(stderr, "Only supported: 720p, 1080p, 2160p\n");
+    if (vgst_video_src_init(&cfg)) {
+        fprintf(stderr, "ERROR: vgst_video_src_init failed: %s\n", vlib_errstr);
         return 1;
     }
 
-    // --- Enumeracja źródeł / media graph ---
-    ret = vgst_video_src_init(&cfg);
-    if (ret) {
-        fprintf(stderr, "ERROR: vgst_video_src_init failed: %s\n", vlib_errstr);
-        return ret;
-    }
-
-    // Input = Output jeśli brak
     if (!cfg.width_in) {
         cfg.width_in  = cfg.width_out;
         cfg.height_in = cfg.height_out;
     }
 
-    // --- Inic biblioteki / fill domyślne ---
-    filter_init(&ft); // rejestracja typów filtrów (woła gst_init wewnątrz, nie szkodzi)
+    filter_init(&ft);
+    vgst_init_base(&cfg, &enc_param, &input_param, &output_param,
+                   &cmn_param, &filter_param, &ft);
+    init_struct_params(&enc_param, &input_param, &output_param,
+                      &cmn_param, &filter_param);
 
-    vgst_init_base(&cfg, &enc_param, &input_param, &output_param, &cmn_param, &filter_param, &ft);
-    init_struct_params(&enc_param, &input_param, &output_param, &cmn_param, &filter_param);
-
-    // Bezpieczne doprecyzowanie wartości na start (zostajemy przy 1 strumieniu)
     cmn_param.num_src       = 1;
-    input_param.filter_type = VCU;  // unikamy SDX bez nazwy filtra
-    // jeśli wiesz jaki format – ustaw przyjaźniejszy string:
-    input_param.format_str  = "NV12";        // albo "YUY2" gdy wejście YUYV
+    input_param.filter_type = VCU;
+    input_param.format_str  = "NV12";
 
-    // --- wybór źródła jak w GUI (preferuj TPG) ---
     config.type = 0;
     config.mode = 0;
-    for (config.vsrc = 0; config.vsrc < vlib_video_src_cnt_get(); config.vsrc++) {
-        const struct vlib_vdev *vsrc = vlib_video_src_get(config.vsrc);
-        if (vlib_video_src_get_class(vsrc) == VLIB_VCLASS_TPG) break;
+
+    bool list_src = false, list_snk = false, list_f2d = false;
+    const char *src_name = NULL, *sink_name = NULL;
+    const char *filter_arg = NULL, *accel_arg = NULL;
+    const char *pipe_src = NULL, *pipe_sink = NULL, *pipe_mode = NULL;
+    bool run_pipeline = false;
+
+    for (int i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "--source")) {
+            if (i + 1 >= argc) { print_usage(argv[0]); return 1; }
+            if (argv[i + 1][0] == 'h') { list_src = true; i++; }
+            else src_name = argv[++i];
+        } else if (!strcmp(argv[i], "--sink")) {
+            if (i + 1 >= argc) { print_usage(argv[0]); return 1; }
+            if (argv[i + 1][0] == 'h') { list_snk = true; i++; }
+            else sink_name = argv[++i];
+        } else if (!strcmp(argv[i], "--filter2d")) {
+            if (i + 1 >= argc) { print_usage(argv[0]); return 1; }
+            if (argv[i + 1][0] == 'h') { list_f2d = true; i++; }
+            else filter_arg = argv[++i];
+        } else if (!strcmp(argv[i], "--accel")) {
+            if (i + 1 >= argc) { print_usage(argv[0]); return 1; }
+            accel_arg = argv[++i];
+        } else if (!strcmp(argv[i], "--pipeline")) {
+            run_pipeline = true;
+            int rem = argc - (i + 1);
+            if (rem >= 3 && argv[i+1][0] != '-' && argv[i+2][0] != '-' && argv[i+3][0] != '-') {
+                pipe_src  = argv[++i];
+                pipe_sink = argv[++i];
+                pipe_mode = argv[++i];
+            } else if (rem >= 1) {
+                pipe_mode = argv[++i];
+            } else {
+                print_usage(argv[0]);
+                closeall();
+                return 1;
+            }
+        } else if (!strcmp(argv[i], "--help")) {
+            print_usage(argv[0]);
+            closeall();
+            return 0;
+        } else {
+            fprintf(stderr, "Unknown option: %s\n", argv[i]);
+            print_usage(argv[0]);
+            closeall();
+            return 1;
+        }
     }
-    if (config.vsrc == vlib_video_src_cnt_get()) {
-        config.vsrc = 0; // fallback: pierwsze dostępne
+
+    if (list_src) { list_sources(); closeall(); return 0; }
+    if (list_snk) { list_sinks(); closeall(); return 0; }
+    if (list_f2d) { list_filter2d(); closeall(); return 0; }
+    if (!run_pipeline) {
+        print_usage(argv[0]);
+        closeall();
+        return 0;
     }
 
-    printf("video sources found: %zu, using index %u\n",
-           vlib_video_src_cnt_get(), config.vsrc);
+    if (!pipe_src) pipe_src = src_name;
+    if (!pipe_sink) pipe_sink = sink_name;
+    if (!pipe_src || !pipe_sink || !pipe_mode) {
+        fprintf(stderr, "source/sink/mode not specified\n");
+        print_usage(argv[0]);
+        closeall();
+        return 1;
+    }
 
-    // --- init controllera i start wybranego źródła ---
-    cmd_init(&mc, config, &ft);
-    setVideo(&mc, 1);   // NIE na sztywno „1” – używamy wykrytego
+    int src_idx = source_from_name(pipe_src);
+    if (src_idx < 0) {
+        fprintf(stderr, "Unknown source '%s'\n", pipe_src);
+        closeall();
+        return 1;
+    }
+    config.vsrc = (size_t)src_idx;
+    VGST_SINK_TYPE st;
+    if (sink_from_name(pipe_sink, &st) < 0) {
+        fprintf(stderr, "Unknown sink '%s'\n", pipe_sink);
+        closeall();
+        return 1;
+    }
+    cmn_param.sink_type = st;
+    if (!strcasecmp(pipe_mode, "processing"))
+        config.mode = 1;
+    else
+        config.mode = 0;
 
-    // --- Ustaw PLAYING + bus watch (jeśli biblioteka sama nie robi) ---
-    for (unsigned s = 0; s < cmn_param.num_src; ++s) {
-        if (app.playback[s].pipeline) {
-            gst_element_set_state(app.playback[s].pipeline, GST_STATE_PLAYING);
+    if (accel_arg) {
+        if (!strcasecmp(accel_arg, "sw"))
+            input_param.filter_type = SDX_FILTER;
+        else
+            input_param.filter_type = VCU;
+    }
 
-            GstBus *bus = gst_element_get_bus(app.playback[s].pipeline);
-            if (bus) {
-                gst_bus_add_watch(bus, (GstBusFunc)bus_callback, &app.playback[s]);
-                gst_object_unref(bus);
+    enum { F_NONE, F_PRESET, F_COEFF } fkind = F_NONE;
+    int preset_idx = 0;
+    short coeffs[9];
+    if (filter_arg) {
+        if (strlen(filter_arg) == 9 && strspn(filter_arg, "0123456789") == 9) {
+            for (int i = 0; i < 9; ++i)
+                coeffs[i] = filter_arg[i] - '0';
+            fkind = F_COEFF;
+        } else {
+            for (int i = 0; i < FILTER2D_PRESET_CNT; ++i) {
+                const char *nm = filter2d_get_preset_name(i);
+                if (!strcasecmp(filter_arg, nm)) { preset_idx = i; fkind = F_PRESET; break; }
+            }
+            if (fkind == F_NONE) {
+                fprintf(stderr, "Unknown filter preset '%s'\n", filter_arg);
+                closeall();
+                return 1;
             }
         }
     }
 
-    // --- Pętla GLib (zastępuje event loop Qt) ---
+    cmd_init(&mc, config, &ft);
+    if (fkind == F_PRESET)
+        setPreset(&mc, preset_idx);
+    else if (fkind == F_COEFF)
+        filterCoeff(&mc,
+            coeffs[0], coeffs[1], coeffs[2],
+            coeffs[3], coeffs[4], coeffs[5],
+            coeffs[6], coeffs[7], coeffs[8]);
+    setVideo(&mc, 1);
+
     g_loop = g_main_loop_new(NULL, FALSE);
     g_main_loop_run(g_loop);
-
-    // --- Sprzątanie po Ctrl+C / EOS ---
-    for (unsigned s = 0; s < cmn_param.num_src; ++s) {
-        if (app.playback[s].pipeline) {
-            gst_element_set_state(app.playback[s].pipeline, GST_STATE_NULL);
-            gst_object_unref(app.playback[s].pipeline);
-            app.playback[s].pipeline = NULL;
-        }
-    }
     g_main_loop_unref(g_loop);
     g_loop = NULL;
+
+    closeall();
 
     return 0;
 }
