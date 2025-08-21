@@ -1,25 +1,16 @@
 #ifndef VIDEO_CFG_H
 #define VIDEO_CFG_H
 
-#include <stddef.h>
-#include <stdbool.h>
-#include <video.h>
+#include <vgst_lib.h>
+#include <vgst_utils.h>
 
-typedef enum vlib_vsrc_class video_src;
-
-struct v_playmode {
-    const char *name;
-    const char *short_name;
-    bool has_panel;
-};
-
-bool vsrc_get_has_panel(video_src id);
-const char* vsrc_get_short_name(video_src id);
-const struct vlib_vdev *vsrc_get_vd(video_src id);
-void vsrc_set_vd(video_src vsrc, const struct vlib_vdev *vd);
-bool vfilter_get_has_panel(const char *name);
-const char* vfilter_get_short_name(const char *name);
-bool vplaymode_get_has_panel(const char *name);
-const char* vplaymode_get_short_name(const char *name);
+void video_cfg_init(void);
+void video_cfg_list_sources(void);
+void video_cfg_list_sinks(void);
+int  video_cfg_set_source(const char *name);
+int  video_cfg_set_sink(const char *name);
+int  video_cfg_set_filter(const char *name, const short coeff[3][3]);
+void video_cfg_set_accel(int hw);
+int  video_cfg_create_pipeline(const char *mode);
 
 #endif /* VIDEO_CFG_H */
